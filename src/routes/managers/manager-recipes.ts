@@ -32,7 +32,7 @@ export class RecipeManager extends BaseManager {
 
     const bagList = await this.prisma.bags.findMany({
       include: {
-        _count: isAdmin ? {} : {
+        _count: isAdmin ? undefined : {
           select: {
             acl: {
               where: {
@@ -44,7 +44,7 @@ export class RecipeManager extends BaseManager {
         },
         acl: true,
       },
-      where: isAdmin ? {} : { OR }
+      where: isAdmin ? undefined : { OR }
     });
 
     const recipeList = await this.prisma.recipes.findMany({
@@ -54,7 +54,7 @@ export class RecipeManager extends BaseManager {
           orderBy: { position: "asc" }
         },
         acl: true,
-        _count: isAdmin ? {} : {
+        _count: isAdmin ? undefined : {
           select: {
             acl: {
               where: {
@@ -65,10 +65,14 @@ export class RecipeManager extends BaseManager {
           }
         },
       },
-      where: isAdmin ? {} : { recipe_bags: { every: { bag: { OR } } } }
+      where: isAdmin ? undefined : { recipe_bags: { every: { bag: { OR } } } }
     });
 
-    const userList = !isAdmin ? null : await this.prisma.users.findMany({
+    const userListUser = !isAdmin && await this.prisma.users.findMany({
+      select: { user_id: true, username: true }
+    });
+
+    const userListAdmin = !!isAdmin && await this.prisma.users.findMany({
       select: { user_id: true, username: true, email: true, roles: true, last_login: true, created_at: true }
     });
 
@@ -79,7 +83,8 @@ export class RecipeManager extends BaseManager {
       recipeList,
       isAdmin,
       user_id,
-      userList,
+      userListUser,
+      userListAdmin,
       roleList,
       username,
       firstGuestUser: !!this.firstGuestUser,
