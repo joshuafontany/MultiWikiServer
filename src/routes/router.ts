@@ -2,12 +2,13 @@ import { STREAM_ENDED, Streamer } from "../streamer";
 import { StateObject } from "../StateObject";
 import RootRoute from ".";
 import * as z from "zod";
-import { createStrictAwaitProxy, JsonValue, Z2 } from "../utils";
+import { createStrictAwaitProxy, JsonValue, truthy, Z2 } from "../utils";
 import { Route, rootRoute, RouteOptAny, RouteMatch, } from "../utils";
 import { MWSConfigConfig } from "../server";
 import { setupDevServer } from "../setupDevServer";
 import { Commander } from "../commander";
 import { ZodRoute, ZodState } from "./BaseManager";
+import { CacheState, startupCache } from "./cache";
 
 export { RouteMatch, Route, rootRoute };
 
@@ -53,7 +54,7 @@ export class Router {
 
   static async makeRouter(
     commander: Commander,
-    enableDevServer: string | undefined,
+    enableDevServer: string | undefined
   ) {
 
     const sendDevServer = await setupDevServer(enableDevServer);
@@ -70,9 +71,9 @@ export class Router {
 
     await RootRoute(rootRoute);
 
-    const router = new Router(rootRoute, commander);
+    const cache = await startupCache(commander);
 
-    return router;
+    return new Router(rootRoute, commander, cache);
   }
 
 
@@ -91,9 +92,11 @@ export class Router {
   constructor(
     private rootRoute: rootRoute,
     private commander: Commander,
+    private tiddlerCache: CacheState,
   ) {
     this.engine = commander.engine;
     this.SessionManager = commander.SessionManager;
+
   }
 
   async handle(streamer: Streamer) {
@@ -126,6 +129,7 @@ export class Router {
         bodyFormat,
         authUser,
         this.commander,
+        this.tiddlerCache,
       ) as statetype
     );
 

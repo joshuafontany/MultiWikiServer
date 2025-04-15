@@ -11,7 +11,7 @@ import * as attacher from "./routes/services/attachments";
 import { PasswordService } from "./routes/services/PasswordService";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { ITXClientDenyList } from "@prisma/client/runtime/library";
-import { TW } from "tiddlywiki";
+import { TiddlerFields, TW } from "tiddlywiki";
 import { dist_resolve } from "./utils";
 import { readdir, readFile } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
@@ -82,6 +82,7 @@ class StartupCommander {
     this.storePath = path.resolve(this.wikiPath, "store");
     this.databasePath = path.resolve(this.storePath, "database.sqlite");
     this.outputPath = path.resolve($tw.boot.wikiPath, $tw.config.wikiOutputSubDir);
+    this.cachePath = path.resolve(this.wikiPath, "cache");
 
     if (!existsSync(this.storePath)) {
       mkdirSync(this.storePath, { recursive: true });
@@ -125,7 +126,9 @@ class StartupCommander {
     this.setupRequired = false;
 
     if (process.env.RUN_OLD_MWS_DB_SETUP_FOR_TESTING) {
-      await this.libsql.executeMultiple(readFileSync(dist_resolve("../prisma/migrations/20250406213424_init/migration.sql"), "utf8"));
+      await this.libsql.executeMultiple(readFileSync(dist_resolve(
+        "../prisma/migrations/20250406213424_init/migration.sql"
+      ), "utf8"));
     }
 
     const tables = await this.libsql.batch([{
@@ -206,6 +209,8 @@ class StartupCommander {
   wikiPath: string;
   storePath: string;
   databasePath: string;
+  cachePath: string;
+
   libsql;
   engine: PrismaClient<Prisma.PrismaClientOptions, never, {
     result: {
@@ -265,13 +270,14 @@ export class Commander extends StartupCommander {
     this.nextToken = 0;
     this.verbose = false;
 
-    const listeners = config.listeners;
+    const { listeners, onListenersCreated } = config;
     config.listeners = [];
+    config.onListenersCreated = undefined;
     // there's nothing that can't be hacked in a Node process,
     // but this just makes it a little bit harder for the listeners to be read.
     // this can be replaced, but it only recieves the listeners via closure.
     this.create_mws_listen = (params: string[]) => {
-      return new mws_listen.Command(params, this, listeners);
+      return new mws_listen.Command(params, this, listeners, onListenersCreated);
     }
   }
 
