@@ -4,20 +4,18 @@ import * as path from "node:path";
 
 import { MWSConfig } from "./server";
 import { Prisma, PrismaClient } from "@prisma/client";
-import { createClient } from "@libsql/client";
-import { PrismaLibSQL } from "@prisma/adapter-libsql";
-import * as sessions from "./routes/services/sessions";
-import * as attacher from "./routes/services/attachments";
-import { PasswordService } from "./routes/services/PasswordService";
+
+import * as sessions from "./services/sessions";
+import * as attacher from "./services/attachments";
+import { PasswordService } from "./services/PasswordService";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { ITXClientDenyList } from "@prisma/client/runtime/library";
-import { TiddlerFields, TW } from "tiddlywiki";
+import { TW } from "tiddlywiki";
 import { dist_resolve } from "./utils";
-import { readdir, readFile } from "node:fs/promises";
-import { createHash, randomUUID } from "node:crypto";
-
-import { commands, mws_listen, divider } from "./commands";
-
+import * as commander from "commander";
+import { commands, listen as listen_command, divider } from "./commands";
+import { ok } from "node:assert";
+import { SqliteAdapter } from "./db/sqlite-adapter";
 export interface $TW {
   utils: any;
   wiki: any;
@@ -34,8 +32,13 @@ export interface $TW {
   }
 }
 
+
 export interface CommandInfo {
   name: string;
+  description: string;
+  arguments: [string, string][];
+  options?: [string, string][];
+  internal?: boolean;
   /** 
    * @default false
    * 
@@ -63,8 +66,8 @@ export interface CommandInfo {
    * 
    */
   synchronous?: boolean;
-  namedParameterMode?: boolean;
-  mandatoryParameters?: string[];
+  // namedParameterMode?: boolean;
+  // mandatoryParameters?: string[];
 }
 
 // move the startup logic into a separate class
@@ -75,6 +78,13 @@ class StartupCommander {
     public $tw: TW,
     public PasswordService: PasswordService,
   ) {
+
+
+
+    if (config.config?.pathPrefix) {
+      ok(config.config.pathPrefix.startsWith("/"), "pathPrefix must start with a slash");
+      ok(!config.config.pathPrefix.endsWith("/"), "pathPrefix must not end with a slash");
+    }
 
     // console.log(config.wikiPath);
     // this is already resolved to the cwd.
@@ -94,14 +104,7 @@ class StartupCommander {
     // the libsql adapter has an additional advantage of letting us specify pragma 
     // and also gives us more control over connections. 
 
-    this.libsql = createClient({ url: "file://" + this.databasePath });
-    // console.log(this.libsql.protocol, this.databasePath);
-    // this.libsql.execute("pragma synchronous=off");
-    this.engine = new PrismaClient({
-      log: ["info", "warn"],
-      adapter: new PrismaLibSQL(this.libsql),
-      // datasourceUrl: "file:" + this.databasePath
-    });
+
 
     this.siteConfig = {
       wikiPath: this.wikiPath,
@@ -114,105 +117,32 @@ class StartupCommander {
       enableGzip: !!config.config?.enableGzip,
       contentTypeInfo: $tw.config.contentTypeInfo,
       storePath: this.storePath,
+      pathPrefix: config.config?.pathPrefix ?? "",
       saveLargeTextToFileSystem: undefined as never
     };
 
     this.SessionManager = config.SessionManager || sessions.SessionManager;
     this.AttachmentService = config.AttachmentService || attacher.AttachmentService;
 
+    this.adapter = new SqliteAdapter(this.databasePath);
+    this.engine = new PrismaClient({ log: ["info", "warn"], adapter: this.adapter.adapter, });
+
   }
 
   async init() {
+    await this.adapter.init();
     this.setupRequired = false;
-
-    if (process.env.RUN_OLD_MWS_DB_SETUP_FOR_TESTING) {
-      await this.libsql.executeMultiple(readFileSync(dist_resolve(
-        "../prisma/migrations/20250406213424_init/migration.sql"
-      ), "utf8"));
-    }
-
-    const tables = await this.libsql.batch([{
-      sql: `SELECT tbl_name FROM sqlite_master WHERE type='table'`, args: [],
-    }]).then(e => e[0]?.rows as { tbl_name: string }[] | undefined);
-
-    const hasExisting = !!tables?.length;
-
-
-    const hasMigrationsTable = !!tables?.length && !!tables?.some((e) => e.tbl_name === "_prisma_migrations");
-    if (!hasMigrationsTable) await this.createMigrationsTable();
-    await this.checkMigrationsTable(hasExisting && !hasMigrationsTable);
-
-
     const users = await this.engine.users.count();
     if (!users) { this.setupRequired = true; }
   }
-  async createMigrationsTable() {
-    await this.libsql.execute({
-      sql:
-        'CREATE TABLE "_prisma_migrations" (\n' +
-        '    "id"                    TEXT PRIMARY KEY NOT NULL,\n' +
-        '    "checksum"              TEXT NOT NULL,\n' +
-        '    "finished_at"           DATETIME,\n' +
-        '    "migration_name"        TEXT NOT NULL,\n' +
-        '    "logs"                  TEXT,\n' +
-        '    "rolled_back_at"        DATETIME,\n' +
-        '    "started_at"            DATETIME NOT NULL DEFAULT current_timestamp,\n' +
-        '    "applied_steps_count"   INTEGER UNSIGNED NOT NULL DEFAULT 0\n' +
-        ')',
-      args: [],
-    })
-  }
-  async checkMigrationsTable(migrateExisting: boolean) {
 
-    const applied_migrations = new Set(
-      await this.libsql.batch([{
-        sql: `Select migration_name from _prisma_migrations`, args: []
-      }]).then(e => e[0]?.rows.map(e => e.migration_name))
-    );
-
-    const migrations = await readdir(dist_resolve("../prisma/migrations"));
-    migrations.sort();
-
-    const new_migrations = migrations.filter(m => !applied_migrations.has(m) && m !== "migration_lock.toml");
-    if (!new_migrations.length) return;
-
-    function generateChecksum(fileContent: string) {
-      return createHash('sha256').update(fileContent).digest('hex');
-    }
-
-    console.log("New migrations found", new_migrations);
-
-    for (const migration of new_migrations) {
-      const migration_path = dist_resolve(`../prisma/migrations/${migration}/migration.sql`);
-      if (!existsSync(migration_path)) continue;
-
-      const fileContent = await readFile(migration_path, 'utf-8');
-      // this is the hard-coded name of the first migration.
-      if (migrateExisting && migration === "20250406213424_init") {
-        console.log("Existing migration", migration, "is already applied");
-      } else {
-        console.log("Applying migration", migration);
-        await this.libsql.executeMultiple(fileContent);
-      }
-
-      await this.libsql.execute({
-        sql: 'INSERT INTO _prisma_migrations (' +
-          'id, migration_name, checksum, finished_at, logs, rolled_back_at, started_at, applied_steps_count' +
-          ') VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        args: [randomUUID(), migration, generateChecksum(fileContent), Date.now(), null, null, Date.now(), 1]
-      });
-
-    }
-    console.log("Migrations applied", new_migrations);
-
-  }
   wikiPath: string;
   storePath: string;
   databasePath: string;
   cachePath: string;
 
-  libsql;
-  engine: PrismaClient<Prisma.PrismaClientOptions, never, {
+  adapter!: SqliteAdapter;
+  engine!: PrismaClient<Prisma.PrismaClientOptions, never, {
     result: {
       // this types every output field with PrismaField
       [T in Uncapitalize<Prisma.ModelName>]: {
@@ -246,8 +176,6 @@ class StartupCommander {
   SessionManager: typeof sessions.SessionManager;
   AttachmentService: typeof attacher.AttachmentService;
 
-
-
   /** Signals that database setup is required. May be set to false by any qualified setup command. */
   setupRequired: boolean = true;
   outputPath: string;
@@ -277,8 +205,48 @@ export class Commander extends StartupCommander {
     // but this just makes it a little bit harder for the listeners to be read.
     // this can be replaced, but it only recieves the listeners via closure.
     this.create_mws_listen = (params: string[]) => {
-      return new mws_listen.Command(params, this, listeners, onListenersCreated);
-    }
+      console.log(listeners);
+      return new listen_command.Command(params, this, listeners, onListenersCreated);
+    };
+  }
+  program!: commander.Command;
+
+  async init() {
+    await super.init();
+
+    this.program = new commander.Command();
+    const pkg = JSON.parse(readFileSync(dist_resolve("../package.json"), "utf-8"));
+
+    this.program
+      .name("mws")
+      .description(pkg.description)
+      .version(pkg.version)
+      .enablePositionalOptions()
+      .passThroughOptions()
+      .showHelpAfterError()
+
+    Object.keys(commands).forEach((key) => {
+      const c = commands[key]!;
+      if (c.info.internal) return;
+      if (c.info.name === "help") return;
+      const command = this.program.command(c.info.name);
+      command.description(c.info.description);
+      c.info.arguments.forEach(([name, description]) => {
+        command.argument(name, description);
+      });
+      c.info.options?.forEach(([name, description]) => {
+        command.option(name, description);
+      });
+
+      command.action((...args) => {
+        const command2 = args.pop();
+        const options = args.pop();
+        // TODO: options should become named parameters
+        this.addCommandTokens(["--" + command2.name(), ...args]);
+      });
+    });
+
+
   }
 
   create_mws_listen;
@@ -313,15 +281,34 @@ export class Commander extends StartupCommander {
   */
   execute(commandTokens: string[]) {
     console.log("Commander", commandTokens);
+    this.setPromise();
+    this.commandTokens = [];
+    switch (commandTokens[0]) {
+      // internal dev commands
+      case "--client-build":
+        this.commandTokens.push(...commandTokens); break;
+      default:
+        this.program.parse(commandTokens, { from: 'user' }); break;
+    }
+
+    this.executeNextCommand();
+    return this.promise;
+  }
+  executeInternal(commandTokens: string[]) {
+    console.log("Commander", commandTokens);
+    this.setPromise();
     this.commandTokens = commandTokens;
+    this.executeNextCommand();
+    return this.promise;
+  }
+  setPromise() {
     this.promise = new Promise<void>((resolve, reject) => {
       this.callback = (err: any) => {
         if (err) this.$tw.utils.error("Error: " + err);
         err ? reject(err) : resolve();
       };
     });
-    this.executeNextCommand();
-    return this.promise;
+
   }
   /*
   Execute the next command in the sequence
@@ -361,16 +348,16 @@ export class Commander extends StartupCommander {
 
 
     // Parse named parameters if required
-    const paramsIfMandetory = !command.info.mandatoryParameters ? params :
-      this.extractNamedParameters(params, command.info.mandatoryParameters);
+    // const paramsIfMandetory = params;
     if (typeof params === "string") { this.callback(params); return; }
+    console.log(params);
 
     new Promise<any>(async (resolve) => {
       const { Command, info } = command!;
       try {
-        c = info.name === "mws-listen"
-          ? this.create_mws_listen(paramsIfMandetory)
-          : new Command(paramsIfMandetory, this, info.synchronous ? undefined : resolve);
+        c = info.name === listen_command.info.name
+          ? this.create_mws_listen(params)
+          : new Command(params, this, info.synchronous ? undefined : resolve);
         err = await c.execute();
         if (err || info.synchronous) resolve(err);
       } catch (e) {

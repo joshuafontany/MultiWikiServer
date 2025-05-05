@@ -4,13 +4,13 @@ import { STREAM_ENDED, Streamer, StreamerState } from './streamer';
 import { PassThrough } from 'node:stream';
 import { AllowedMethod, BodyFormat, RouteMatch, Router, SiteConfig } from './routes/router';
 import * as z from 'zod';
-import { AuthUser } from './routes/services/sessions';
+import { AuthUser } from './services/sessions';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { Types } from '@prisma/client/runtime/library';
 import { DataChecks } from './utils';
 import { setupDevServer } from "./setupDevServer";
 import { Commander } from './commander';
-import { PasswordService } from './routes/services/PasswordService';
+import { PasswordService } from './services/PasswordService';
 
 export interface AuthStateRouteACL {
 
@@ -28,21 +28,6 @@ export class StateObject<
 > extends StreamerState {
 
   z: typeof z = z;
-
-
-
-  /** sends a status and plain text string body */
-  sendSimple(status: number, msg: string): typeof STREAM_ENDED {
-    return this.sendString(status, {
-      "content-type": "text/plain"
-    }, msg, "utf8");
-  }
-  /** Stringify the value (unconditionally) and send it with content-type `application/json` */
-  sendJSON(status: number, obj: any): typeof STREAM_ENDED {
-    return this.sendString(status, {
-      "content-type": "application/json"
-    }, JSON.stringify(obj), "utf8");
-  }
 
   STREAM_ENDED: typeof STREAM_ENDED = STREAM_ENDED;
 
@@ -63,6 +48,8 @@ export class StateObject<
    * an *object from entries* of all the pathParams in the tree mapped to the path regex matches from that route.
    * 
    * Object.fromEntries takes the last value if there are duplicates, so conflicting names will have the last value in the path. 
+   * 
+   * Conflicting names would be defined on the route definitions, so just change the name there if there is a conflict.
    */
   pathParams: Record<RoutePathParams extends (infer X extends string)[][] ? X : never, string | undefined>;
   /** 
@@ -94,6 +81,7 @@ export class StateObject<
     this.engine = commander.engine;
     this.config = commander.siteConfig;
     this.PasswordService = commander.PasswordService;
+    
 
     this.readMultipartData = readMultipartData.bind(this);
     this.sendResponse = sendResponse.bind(undefined, this.config, this);
@@ -117,6 +105,14 @@ export class StateObject<
     else this.queryParams = queryParamsZodCheck.data;
 
 
+  }
+  
+  okUser() {
+    if (!this.user.isLoggedIn) throw "User not authenticated";
+  }
+  okAdmin() {
+    if (!this.user.isLoggedIn) throw "User not authenticated";
+    if (!this.user.isAdmin) throw "User is not an admin";
   }
 
   // createStore(engine: PrismaTxnClient) {

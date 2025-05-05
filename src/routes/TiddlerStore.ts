@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { SiteConfig } from "./router";
-import { AttachmentService, TiddlerFields } from "./services/attachments";
+import { AttachmentService, TiddlerFields } from "../services/attachments";
 import { ok } from "assert";
 import { Commander } from "../commander";
 import { FileInfoTiddlers } from "tiddlywiki";
@@ -304,7 +304,7 @@ export class TiddlerStore {
 
     return {
       ...tiddlerInfo,
-      tiddler: await this.attachService.processOutgoingTiddler(tiddlerInfo)
+      tiddler: this.attachService.processOutgoingTiddler(tiddlerInfo)
     };
 
   }
@@ -634,6 +634,7 @@ export class TiddlerStore {
     // 	});
     // 	return { tiddler_id: rowDeleteMarker.lastInsertRowid };
   }
+  
   async getRecipeTiddlersByBag(
     recipe_name: PrismaField<"Recipes", "recipe_name">,
     options: {
@@ -653,6 +654,7 @@ export class TiddlerStore {
         position: true,
         bag: {
           select: {
+            bag_id: true,
             bag_name: true,
             is_plugin: true,
             tiddlers: {
@@ -673,6 +675,7 @@ export class TiddlerStore {
 
 
     return bags.map(e => ({
+      bag_id: e.bag.bag_id,
       bag_name: e.bag.bag_name,
       is_plugin: e.bag.is_plugin,
       position: e.position,

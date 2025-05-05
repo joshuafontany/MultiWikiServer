@@ -1,13 +1,11 @@
 import { StateObject } from "../../StateObject";
 import { STREAM_ENDED } from "../../streamer";
-import { ZodAssert as zodAssert, Z2 } from "../../utils";
-import { BaseKeyMap, BaseManager, BaseManagerMap, ZodAction, ZodRoute, } from "../BaseManager";
-import { ZodTypeAny, ZodType, z } from "zod";
-import { AllowedMethod, BodyFormat, registerZodRoutes, zodRoute } from "../router";
+import { tryParseJSON, ZodAssert as zodAssert } from "../../utils";
+import { registerZodRoutes, zodRoute, RouterKeyMap, RouterRouteMap } from "../router";
 import { TiddlerServer } from "../bag-file-server";
 
 
-export const TiddlerKeyMap: BaseKeyMap<TiddlerRouter, true> = {
+export const TiddlerKeyMap: RouterKeyMap<TiddlerRouter, true> = {
   handleCreateRecipeTiddler: true,
   handleDeleteRecipeTiddler: true,
   handleGetBagTiddler: true,
@@ -19,7 +17,7 @@ export const TiddlerKeyMap: BaseKeyMap<TiddlerRouter, true> = {
   handleGetWikiIndex: true,
 }
 
-export type TiddlerManagerMap = BaseManagerMap<TiddlerRouter>;
+export type TiddlerManagerMap = RouterRouteMap<TiddlerRouter>;
 
 export class TiddlerRouter {
   static defineRoutes = (root: rootRoute) => {
@@ -74,11 +72,9 @@ export class TiddlerRouter {
       throw await state.$transaction(async prisma => {
         const server = new TiddlerServer(state, prisma);
         const bag = await server.getRecipeBagWithTiddler({ recipe_name, title });
-        // return await server.getBagTiddler({ bag_id: bag?.bag_id, title });
         return server.sendBagTiddler({ state, bag_id: bag?.bag_id, title });
       });
 
-      // return this.sendTiddlerInfo(state, tiddlerInfo);
     }
   )
 
@@ -154,16 +150,39 @@ export class TiddlerRouter {
 
       const result = await state.$transaction(async prisma => {
         const server = new TiddlerServer(state, prisma);
-        return await server.getRecipeTiddlers(recipe_name, {
-          include_deleted,
-          last_known_tiddler_id
-        });
-
+        const options = { include_deleted, last_known_tiddler_id };
+        let result = await server.getRecipeTiddlers(recipe_name);
+        return result
+          .filter(tiddler => options.include_deleted || !tiddler.is_deleted)
+          .filter(tiddler => !options.last_known_tiddler_id || tiddler.tiddler_id > options.last_known_tiddler_id);
       });
       return result;
     }
   )
 
+  parseFields(input: string, ctype: string | undefined) {
+
+    if (ctype?.startsWith("application/json"))
+      return tryParseJSON<any>(input);
+
+    if (ctype?.startsWith("application/x-mws-tiddler")) {
+      //https://jsperf.app/mukuro
+      // for a big text field (100k random characters)
+      // splitting the string is 1000x faster!
+      // but I don't really trust getFieldStringBlock 
+      // because it doesn't check for fields with colon names
+
+      const headerEnd = input.indexOf("\n\n");
+      if (headerEnd === -1) return tryParseJSON<any>(input);
+      const header = input.slice(0, headerEnd);
+      const body = input.slice(headerEnd + 2);
+
+      const fields = tryParseJSON<any>(header);
+      if (!fields) return undefined;
+      fields.text = body;
+      return fields;
+    }
+  }
 
   handleSaveRecipeTiddler = zodRoute(
     ["PUT"],
@@ -172,19 +191,24 @@ export class TiddlerRouter {
       recipe_name: z.prismaField("Recipes", "recipe_name", "string"),
       title: z.prismaField("Tiddlers", "title", "string"),
     }),
-    "json",
-    z => z.object({
-      title: z.prismaField("Tiddlers", "title", "string", false),
-    }).and(z.record(z.string())),
+    "string",
+    z => z.string(),
+    // z => z.object({
+    //   title: z.prismaField("Tiddlers", "title", "string", false),
+    // }).and(z.record(z.string())),
     async (state) => {
 
       const { recipe_name } = state.pathParams;
 
       await state.assertRecipeACL(recipe_name, true);
 
+      const fields = this.parseFields(state.data, state.headers["content-type"]);
+
+      if (fields === undefined) throw state.sendEmpty(400, { "x-reason": "PUT tiddler expects a valid json or x-mws-tiddler body" })
+
       const { bag_name, tiddler_id } = await state.$transaction(async prisma => {
         const server = new TiddlerServer(state, prisma);
-        return await server.saveRecipeTiddler(state.data, state.pathParams.recipe_name);
+        return await server.saveRecipeTiddler(fields, state.pathParams.recipe_name);
       });
 
       return { bag_name, tiddler_id };

@@ -1,5 +1,5 @@
 
-import { ReactNode, useState } from 'react';
+import { PropsWithChildren, ReactNode, useState } from 'react';
 import Header from './Header';
 
 import { Dashboard } from '../Dashboard/Dashboard';
@@ -7,6 +7,8 @@ import UserManagement from '../UserList/UserManagement';
 import ManageUser from '../UserEdit/ManageUser';
 import { useIndexJson } from '../../helpers/utils';
 import { UsersScreen } from '../Users';
+import { ErrorBoundary } from 'react-error-boundary';
+import { Container, Stack } from '@mui/material';
 
 
 export const Frame = (props: {}) => {
@@ -16,12 +18,7 @@ export const Frame = (props: {}) => {
   const username = indexJson?.username;
   const userIsAdmin = indexJson?.isAdmin || false;
   const userIsLoggedIn = !!indexJson.isLoggedIn;
-  const firstGuestUser = indexJson.firstGuestUser;
   const user = indexJson;
-  const allowReads = indexJson.allowAnonReads;
-  const allowWrites = indexJson.allowAnonWrites;
-
-  const [showAnonConfig, setShowAnonConfig] = useState(false);
 
   const pages: [RegExp, (args: string[]) => ReactNode, string][] = [
     [/^\/$/, () => <Dashboard />, "Wikis Available Here"],
@@ -29,8 +26,8 @@ export const Frame = (props: {}) => {
     [/^\/admin\/users\/(\d+)$/, ([, user_id]) => <ManageUser userID={user_id} />, "Manage User"],
     [/^\/admin\/roles$/, () => <UsersScreen />, "Roles"],
   ];
-
-  const matches = pages.map(([re]) => re.exec(location.pathname));
+  const route = location.pathname.slice(pathPrefix.length);
+  const matches = pages.map(([re]) => re.exec(route));
   const index = matches.findIndex(m => m !== null);
   const page = index > -1 && pages[index][1](matches[index]!) || null;
 
@@ -41,12 +38,10 @@ export const Frame = (props: {}) => {
         username={username}
         userIsAdmin={userIsAdmin}
         userIsLoggedIn={userIsLoggedIn}
-        firstGuestUser={firstGuestUser}
         userId={user?.user_id}
-        setShowAnonConfig={setShowAnonConfig}
       />
 
-      {firstGuestUser && (
+      {/* {firstGuestUser && (
         <div className="mws-security-warning">
           <div className="mws-security-warning-content">
             <div className="mws-security-warning-icon">⚠️</div>
@@ -58,11 +53,16 @@ export const Frame = (props: {}) => {
             </div>
           </div>
         </div>
-      )}
-
-      {page ?? <div className="mws-error">Page not found</div>}
+      )} */}
+      <ErrorBoundary fallback={<Message>An error occured</Message>}>
+        {page ?? <Message>Page not found</Message>}
+      </ErrorBoundary>
     </>
   )
 };
 
+function Message({ children }: PropsWithChildren<{}>) {
+  return <Stack alignItems="center" direction="column" padding={8} >{children}</Stack>
+
+}
 
