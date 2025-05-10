@@ -29,7 +29,6 @@ export class SqliteAdapter {
 
     const hasExisting = !!tables?.length;
 
-
     const hasMigrationsTable = !!tables?.length && !!tables?.some((e) => e[0] === "_prisma_migrations");
     if (!hasMigrationsTable) await this.createMigrationsTable(libsql);
     await this.checkMigrationsTable(libsql, hasExisting && !hasMigrationsTable);

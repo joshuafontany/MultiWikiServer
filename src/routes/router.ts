@@ -1,10 +1,10 @@
 import { STREAM_ENDED, Streamer, SYMBOL_IGNORE_ERROR } from "../streamer";
 import { StateObject } from "../StateObject";
-import RootRoute from ".";
+import RootRoute, { importEsbuild } from ".";
 import * as z from "zod";
 import { createStrictAwaitProxy, JsonValue, truthy, Z2 } from "../utils";
 import { Route, rootRoute, RouteOptAny, RouteMatch, } from "../utils";
-import { MWSConfigConfig } from "../server";
+import { MWSConfigConfig, SiteConfig } from "../server";
 import { setupDevServer } from "../setupDevServer";
 import { Commander } from "../commander";
 import { CacheState, startupCache } from "./cache";
@@ -67,36 +67,52 @@ export class Router {
 
     await RootRoute(rootRoute, commander.siteConfig);
 
-    const cache = await startupCache(commander);
+    const cache = await startupCache(rootRoute, commander);
+
+    await importEsbuild(rootRoute);
 
     return new Router(rootRoute, commander, cache);
   }
 
 
-  pathPrefix: string = "";
+
   enableBrowserCache: boolean = true;
   enableGzip: boolean = false;
   csrfDisable: boolean = false;
 
+  siteConfig: SiteConfig;
+  get pathPrefix() {
+    return this.siteConfig.pathPrefix;
+  }
+
   public engine: Commander["engine"];
   private SessionManager: Commander["SessionManager"];
+  public PasswordService: Commander["PasswordService"];
+
+  versions;
+
+  fieldModules: Commander["$tw"]["Tiddler"]["fieldModules"];
+  AttachmentService: Commander["AttachmentService"];
 
   constructor(
     private rootRoute: rootRoute,
-    private commander: Commander,
+    commander: Commander,
     private tiddlerCache: CacheState,
   ) {
     this.engine = commander.engine;
     this.SessionManager = commander.SessionManager;
-    this.pathPrefix = commander.siteConfig.pathPrefix;
-
+    this.siteConfig = commander.siteConfig;
+    this.PasswordService = commander.PasswordService;
+    this.fieldModules = commander.$tw.Tiddler.fieldModules;
+    this.AttachmentService = commander.AttachmentService;
+    this.versions = commander.versions;
   }
 
   handleIncomingRequest(
     req: http.IncomingMessage | http2.Http2ServerRequest,
     res: http.ServerResponse | http2.Http2ServerResponse
   ) {
-    
+
     const [ok, err, streamer] = function (this: Router) {
       try {
         return [true, undefined, new Streamer(req, res, this)] as const;
@@ -144,7 +160,7 @@ export class Router {
         routePath,
         bodyFormat,
         authUser,
-        this.commander,
+        this,
         this.tiddlerCache,
       ) as statetype
     );
@@ -419,8 +435,10 @@ export const registerZodRoutes = (root: rootRoute, router: any, keys: string[]) 
         if (error === STREAM_ENDED) {
           return error;
         } else if (typeof error === "string") {
+          console.log(error);
           return state.sendString(400, { "x-reason": "zod-handler" }, error, "utf8");
         } else if (error instanceof Error && error.name === "UserError") {
+          console.log(error.stack);
           return state.sendString(400, { "x-reason": "user-error" }, error.message, "utf8");
         } else {
           throw error;

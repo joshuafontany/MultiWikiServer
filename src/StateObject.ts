@@ -65,6 +65,7 @@ export class StateObject<
   private engine: Commander["engine"];
   public config: SiteConfig;
   public PasswordService: PasswordService;
+  get pathPrefix() { return this.config.pathPrefix; }
 
   constructor(
     streamer: Streamer,
@@ -73,15 +74,14 @@ export class StateObject<
     /** The bodyformat that ended up taking precedence. This should be correctly typed. */
     public bodyFormat: B,
     public user: AuthUser,
-    public commander: Commander,
+    public router: Router,
     public tiddlerCache: Router["tiddlerCache"],
   ) {
     super(streamer);
 
-    this.engine = commander.engine;
-    this.config = commander.siteConfig;
-    this.PasswordService = commander.PasswordService;
-    
+    this.engine = router.engine;
+    this.config = router.siteConfig;
+    this.PasswordService = router.PasswordService;
 
     this.readMultipartData = readMultipartData.bind(this);
     this.sendResponse = sendResponse.bind(undefined, this.config, this);
@@ -106,7 +106,7 @@ export class StateObject<
 
 
   }
-  
+
   okUser() {
     if (!this.user.isLoggedIn) throw "User not authenticated";
   }
@@ -155,7 +155,7 @@ export class StateObject<
    * - **308 Permanent Redirect:** The resource has permanently moved; the client should use the new URL in future requests.
    */
   redirect(location: string, pushLocation?: boolean): typeof STREAM_ENDED {
-    return this.sendEmpty(302, { 'Location': location });
+    return this.sendEmpty(302, { 'Location': this.config.pathPrefix + location });
   }
 
   sendSSE(retryMilliseconds?: number) {

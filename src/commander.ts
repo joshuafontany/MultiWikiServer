@@ -10,12 +10,19 @@ import * as attacher from "./services/attachments";
 import { PasswordService } from "./services/PasswordService";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { ITXClientDenyList } from "@prisma/client/runtime/library";
-import { TW } from "tiddlywiki";
+import { TiddlerFieldModule, TW } from "tiddlywiki";
 import { dist_resolve } from "./utils";
 import * as commander from "commander";
 import { commands, listen as listen_command, divider } from "./commands";
 import { ok } from "node:assert";
 import { SqliteAdapter } from "./db/sqlite-adapter";
+
+
+import pkg from "../package.json";
+
+
+
+
 export interface $TW {
   utils: any;
   wiki: any;
@@ -72,14 +79,15 @@ export interface CommandInfo {
 
 // move the startup logic into a separate class
 class StartupCommander {
-
+  fieldModules;
+  versions;
   constructor(
     public config: MWSConfig,
     public $tw: TW,
     public PasswordService: PasswordService,
   ) {
 
-
+    this.fieldModules = $tw.Tiddler.fieldModules;
 
     if (config.config?.pathPrefix) {
       ok(config.config.pathPrefix.startsWith("/"), "pathPrefix must start with a slash");
@@ -118,7 +126,8 @@ class StartupCommander {
       contentTypeInfo: $tw.config.contentTypeInfo,
       storePath: this.storePath,
       pathPrefix: config.config?.pathPrefix ?? "",
-      saveLargeTextToFileSystem: undefined as never
+      saveLargeTextToFileSystem: undefined as never,
+      enablePluginCache: config.config?.enablePluginCache ?? false,
     };
 
     this.SessionManager = config.SessionManager || sessions.SessionManager;
@@ -127,6 +136,11 @@ class StartupCommander {
     this.adapter = new SqliteAdapter(this.databasePath);
     this.engine = new PrismaClient({ log: ["info", "warn"], adapter: this.adapter.adapter, });
 
+    this.versions = {
+      tiddlywiki: $tw.packageInfo.version,
+      mws: pkg.version,
+    }
+
   }
 
   async init() {
@@ -134,6 +148,22 @@ class StartupCommander {
     this.setupRequired = false;
     const users = await this.engine.users.count();
     if (!users) { this.setupRequired = true; }
+    else {
+      const checkBags = await this.engine.bags.findMany({
+        where: { bag_name: { startsWith: "$:/" } },
+        select: { bag_name: true, tiddlers: { select: { title: true } } }
+      });
+      checkBags.forEach(e => {
+        e.tiddlers.forEach(f => {
+          if (f.title as string !== e.bag_name as string) {
+            if (e.bag_name === "$:/plugins/tiddlywiki/codemirror-fullscreen-editing"
+              && f.title === "$:/plugins/tiddlywiki/codemirror-fullscreen"
+            ) return;
+            console.log(`The bag ${e.bag_name} has a tiddler ${f.title}, in the future this will be unsupported. This can occur if the top bag in a recipe is one of the system bags (starting with $:/)`)
+          }
+        })
+      })
+    }
   }
 
   wikiPath: string;
@@ -205,7 +235,6 @@ export class Commander extends StartupCommander {
     // but this just makes it a little bit harder for the listeners to be read.
     // this can be replaced, but it only recieves the listeners via closure.
     this.create_mws_listen = (params: string[]) => {
-      console.log(listeners);
       return new listen_command.Command(params, this, listeners, onListenersCreated);
     };
   }
@@ -350,7 +379,6 @@ export class Commander extends StartupCommander {
     // Parse named parameters if required
     // const paramsIfMandetory = params;
     if (typeof params === "string") { this.callback(params); return; }
-    console.log(params);
 
     new Promise<any>(async (resolve) => {
       const { Command, info } = command!;

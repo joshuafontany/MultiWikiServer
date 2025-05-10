@@ -4,14 +4,20 @@ import { ZodAssert } from "../utils";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { ManagerRoutes } from "./managers";
 import { TiddlerRouter } from "./managers/router-tiddlers";
+import { DocsRoute } from "./tw-routes";
 
-declare global { const ENABLE_UNSAFE_PRISMA_ROUTE: any; }
+declare global {
+  const ENABLE_UNSAFE_PRISMA_ROUTE: any;
+  const ENABLE_DOCS_ROUTE: any;
+}
 
 export default async function RootRoute(root: rootRoute, config: SiteConfig) {
-  // TiddlerServer.defineRoutes(root);
+  // we can directly hand requests off to loaded tiddlywiki datafolders, 
+  // but this takes significantly more memory than normal MWS.
+  if (process.env.ENABLE_DOCS_ROUTE) DocsRoute(root, "/mws-docs", false);
   TiddlerRouter.defineRoutes(root);
   ManagerRoutes(root, config);
-  if (typeof ENABLE_UNSAFE_PRISMA_ROUTE !== "undefined")
+  if (process.env.ENABLE_UNSAFE_PRISMA_ROUTE)
     root.defineRoute({
       method: ["POST"],
       path: /^\/prisma$/,
@@ -37,7 +43,7 @@ export default async function RootRoute(root: rootRoute, config: SiteConfig) {
     });
 
 
-  await importEsbuild(root);
+
 }
 async function importDir(root: rootRoute, folder: string) {
   await Promise.all(readdirSync(`src/routes/${folder}`).map(async (item) => {
@@ -52,7 +58,7 @@ async function importDir(root: rootRoute, folder: string) {
   }));
 }
 
-async function importEsbuild(root: rootRoute) {
+export async function importEsbuild(root: rootRoute) {
   // "build": "tsc -b; esbuild main=src/main.tsx 
   // --outdir=public --bundle --target=es2020 
   // --platform=browser --jsx=automatic"

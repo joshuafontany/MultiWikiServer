@@ -1,10 +1,10 @@
 import * as fs from "fs";
 import * as path from "path";
-import { SiteConfig } from "./router";
+import { Router, SiteConfig } from "./router";
 import { AttachmentService, TiddlerFields } from "../services/attachments";
 import { ok } from "assert";
 import { Commander } from "../commander";
-import { FileInfoTiddlers } from "tiddlywiki";
+import { FileInfoTiddlers, TiddlerFieldModule } from "tiddlywiki";
 import { UserError } from "../utils";
 
 /**
@@ -35,18 +35,26 @@ store/
 
 */
 export class TiddlerStore {
-  attachService: AttachmentService;
+  static fromCommander(commander: Commander, prisma: PrismaTxnClient) {
+    return new TiddlerStore(
+      commander.$tw.Tiddler.fieldModules,
+      new commander.AttachmentService(commander.siteConfig, prisma),
+      commander.siteConfig,
+      prisma
+    );
+  }
+
+
   storePath: string;
-  config;
-  fieldModules;
+
   constructor(
-    private commander: Commander,
+    public fieldModules: Record<string, TiddlerFieldModule>,
+    public attachService: AttachmentService,
+    public siteConfig: SiteConfig,
     public prisma: PrismaTxnClient
   ) {
-    this.fieldModules = this.commander.$tw.Tiddler.fieldModules;
-    this.attachService = new commander.AttachmentService(commander.siteConfig, prisma);
-    this.storePath = commander.siteConfig.storePath;
-    this.config = commander.siteConfig;
+
+    this.storePath = this.siteConfig.storePath;
   }
 
   /*
@@ -260,6 +268,7 @@ export class TiddlerStore {
   ) {
     const { title } = incomingTiddlerFields;
     const currentBag = await this.getRecipeBagWithTiddler({ recipe_name, title });
+
     const existing_attachment_hash = currentBag && await this.prisma.tiddlers.findFirst({
       where: { title, bag: { bag_name: currentBag.bag.bag_name } },
       select: { attachment_hash: true }
@@ -398,7 +407,7 @@ export class TiddlerStore {
       stream._read = () => {
         // Push data
         const type = tiddlerInfo.tiddler.type || "text/plain";
-        stream.push(tiddlerInfo.tiddler.text || "", (this.config.contentTypeInfo[type] || { encoding: "utf8" }).encoding);
+        stream.push(tiddlerInfo.tiddler.text || "", (this.siteConfig.contentTypeInfo[type] || { encoding: "utf8" }).encoding);
         // Push null to indicate the end of the stream
         stream.push(null);
       };
@@ -427,7 +436,7 @@ export class TiddlerStore {
         recipe_bags: {
           // we're saving to the top most bag
           where: { position: 0 },
-          select: { bag: { select: { bag_id: true, bag_name: true } } },
+          select: { bag: { select: { bag_id: true, bag_name: true, is_plugin: true } } },
         }
       }
     });
@@ -437,6 +446,9 @@ export class TiddlerStore {
     const bag_name = recipe.recipe_bags[0]?.bag.bag_name;
 
     if (!bag_name) throw new UserError("Recipe has no bag at position 0");
+
+    if (recipe.recipe_bags[0]?.bag.is_plugin)
+      throw new UserError("Saving to plugin bags is not currently supported. Please use a normal bag. This error occurs if a plugin bag is at the top of the recipe.\n")
 
     // Save the tiddler to the specified bag
     var { tiddler_id } = await this.saveBagTiddlerFields(tiddlerFields, bag_name, attachment_hash);
@@ -634,7 +646,7 @@ export class TiddlerStore {
     // 	});
     // 	return { tiddler_id: rowDeleteMarker.lastInsertRowid };
   }
-  
+
   async getRecipeTiddlersByBag(
     recipe_name: PrismaField<"Recipes", "recipe_name">,
     options: {
